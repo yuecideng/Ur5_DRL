@@ -76,12 +76,12 @@ class Policy(nn.Module):
 
     def forward(self, inputs):
         x, u = inputs
-        x = self.bn0(x)
+        #x = self.bn0(x)
         x = torch.tanh(self.linear1(x))
         x = torch.tanh(self.linear2(x))
 
         V = self.V(x)
-        mu = torch.tanh(self.mu(x))
+        mu = F.normalize(self.mu(x))
 
         Q = None
         if u is not None:
@@ -126,9 +126,6 @@ class DQN_NAF(object):
         self.agent = Policy(hidden_size,s_dim,a_dim)
         self.agent_target = Policy(hidden_size,s_dim,a_dim)
         self.optim = optim.Adam(self.agent.parameters(), LR)
-        #self.optim_a = optim.SGD(self.actor.parameters(), LR_A, 0.9)
-        #self.optim_c = optim.SGD(self.critic.parameters(), LR_C, 0.9)
-        self.hard_update(self.agent_target, self.agent)
         self.loss_agent_list = []
 
     def store_transition(self, s, a, r, s_):
@@ -145,7 +142,7 @@ class DQN_NAF(object):
         if noise:
             action = action.detach().numpy()[0] + self.noise.sample() 
             
-        return np.clip(action,-1,1)[0]
+        return np.clip(action,-1,1)
 
     def soft_update(self, target, source, tau):
         """
@@ -189,23 +186,16 @@ class DQN_NAF(object):
         self.loss_agent_list.append(loss)
        
     def save_model(self, model_name):
-        torch.save(self.actor.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'actor.pth'))
-        torch.save(self.critic.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'critic.pth'))
-        torch.save(self.optim_a.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'optim_a.pth'))
-        torch.save(self.optim_c.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'optim_c.pth'))
+        torch.save(self.agent.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'model.pth'))
+        torch.save(self.optim.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'optim.pth'))
+        
 
     def plot_loss(self,model_name):
         plt.figure()
-        plt.plot(np.arange(len(self.loss_actor_list)),self.loss_actor_list )
-        plt.ylabel('Loss_Actor')
+        plt.plot(np.arange(len(self.loss_agent_list)),self.loss_agent_list )
+        plt.ylabel('Loss')
         plt.xlabel('training step')
-        plt.savefig(PATH_TO_PLOT+model_name+'loss_actor.png')
-
-        plt.figure()
-        plt.plot(np.arange(len(self.loss_critic_list)),self.loss_critic_list )
-        plt.ylabel('Loss_Critic')
-        plt.xlabel('training step')
-        plt.savefig(PATH_TO_PLOT+model_name+'loss_critic.png')
+        plt.savefig(PATH_TO_PLOT+model_name+'loss.png')
 
 
 

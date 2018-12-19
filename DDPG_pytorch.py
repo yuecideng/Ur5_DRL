@@ -38,28 +38,25 @@ class OrnsteinUhlenbeckActionNoise:
 
 
 class Actor(nn.Module):
-    def __init__(self, s_dim, a_dim,a_bound):
+    def __init__(self, s_dim, a_dim):
         super(Actor, self).__init__()
-        self.a_bound = torch.tensor(a_bound)
-        self.forward1 = nn.Linear(s_dim, 256)
+        self.forward1 = nn.Linear(s_dim, 400)
         self.Relu = nn.ReLU()
-        self.forward2 = nn.Linear(256, a_dim)
+        self.forward2 = nn.Linear(400, a_dim)
         self.tanh = nn.Tanh()
-        self.sigmoid = nn.Sigmoid()
-
+        
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 m.weight.data = fanin_init(m.weight.data.size())
         self.forward2.weight.data.uniform_(-0.003, 0.003)
-
+        
     def forward(self, x):
         
         x = self.forward1(x)
         x = self.Relu(x)
         x = self.forward2(x)
-        #x = F.normalize(x) 
-        x = self.tanh(x)
-        x = x * self.a_bound
+        x = F.normalize(x)
+        #x = self.tanh(x)
 
         return x
 
@@ -68,15 +65,15 @@ class Critic(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Critic, self).__init__()
         self.forward_s = nn.Linear(s_dim, 256)
-        self.forward_sa = nn.Linear(256+a_dim, 128)
-        self.forward1 = nn.Linear(128, 1)
+        self.forward_sa = nn.Linear(256+a_dim, 256)
+        self.forward1 = nn.Linear(256, 1)
         self.Relu = nn.ReLU()
-
+        
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 m.weight.data = fanin_init(m.weight.data.size())
         self.forward1.weight.data.uniform_(-0.003, 0.003)
-
+    
     def forward(self, x, a):
         x = self.forward_s(x)
         x = self.Relu(x)
@@ -92,9 +89,8 @@ class DDPG(object):
             self,
             a_dim, 
             s_dim, 
-            a_bound,
-            LR_A = 0.001,    # learning rate for actor 0.001
-            LR_C = 0.005,    # learning rate for critic 0.005
+            LR_A = 0.01,    # learning rate for actor 0.001
+            LR_C = 0.01,    # learning rate for critic 0.005
             GAMMA = 0.9,     # reward discount  0.9
             TAU = 0.001,      # soft replacement  0.0001
             MEMORY_CAPACITY = 10000,
@@ -109,12 +105,12 @@ class DDPG(object):
 
         # initialize memory counter
         self.memory_counter = 0
-        self.a_dim, self.s_dim, self.a_bound = a_dim, s_dim, a_bound
+        self.a_dim, self.s_dim = a_dim, s_dim
         self.noise = OrnsteinUhlenbeckActionNoise(self.a_dim)
         self.gpu = cuda
 
-        self.actor = Actor(s_dim, a_dim, a_bound)
-        self.actor_target = Actor(s_dim, a_dim, a_bound) 
+        self.actor = Actor(s_dim, a_dim)
+        self.actor_target = Actor(s_dim, a_dim) 
         self.critic = Critic(s_dim, a_dim)
         self.critic_target = Critic(s_dim, a_dim)
 
@@ -146,12 +142,12 @@ class DDPG(object):
         if self.gpu:
             state = state.to(self.cuda)
             action = self.actor(state.detach())[0]
-            action = action.cpu().numpy() + self.noise.sample() * self.a_bound
+            action = action.cpu().numpy() + self.noise.sample() 
         else:
             action = self.actor(state.detach())[0]
-            action = action.detach().numpy() + self.noise.sample() * self.a_bound
+            action = action.detach().numpy() + self.noise.sample() 
             
-        return action
+        return np.clip(action,-1,1)
     
     def choose_action_target(self, state):
         state = torch.from_numpy(state).float()
@@ -159,7 +155,7 @@ class DDPG(object):
         if self.gpu:
             state = state.to(self.cuda)
             action = self.actor_target(state.detach())[0]
-            action = action.cpu().numpy() * self.a_bound
+            action = action.cpu().numpy() 
         else:
             action = self.actor(state.detach())[0]
             action = action.detach().numpy() 
@@ -217,6 +213,7 @@ class DDPG(object):
         loss_actor = -1 * torch.mean(self.critic(s, pred_a))
         self.optim_a.zero_grad()
         loss_actor.backward()
+        #torch.nn.utils.clip_grad_norm(self.critic.parameters(), 1)
         self.optim_a.step()
         self.loss_actor_list.append(loss_actor)
 

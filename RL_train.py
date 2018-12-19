@@ -1,5 +1,6 @@
 from env import Ur5
 from DDPG_pytorch import DDPG
+from DQN_NAF import DQN_NAF
 import numpy as np 
 import matplotlib.pyplot as plt
 from math import pi
@@ -7,11 +8,11 @@ import torch
 import time
 
 #Traning hyperparameters 
-TRAIN_CONFIG = {'state_dim':9,'action_dim':6,'action_bound':pi/36,'train_epoch':500,'train_step':200,
-                'pre_trained':True,'cuda':False}
+TRAIN_CONFIG = {'state_dim':8,'action_dim':5,'action_bound':pi/36,'train_epoch':500,'train_step':200,
+                'pre_trained':False,'cuda':False}
 #Model name saved as date
-MODEL_DATE = '18_12_2018/'
-MODEL_DATE_ = '18_12_2018/'
+MODEL_DATE = '19_12_2018_naf/'
+MODEL_DATE_ = '20_12_2018/'
 PATH_TO_PLOT = '/home/waiyang/pana_RL_yueci/model_plot/'
 PATH_TO_MODEL = '/home/waiyang/pana_RL_yueci/model_para/'
 
@@ -30,9 +31,8 @@ def get_time(start_time):
 
 def main():
     env = Ur5()
-    model = DDPG(a_dim=TRAIN_CONFIG['action_dim'],s_dim=TRAIN_CONFIG['state_dim'],
-            a_bound=TRAIN_CONFIG['action_bound'],cuda=TRAIN_CONFIG['cuda'])
-
+    #model = DDPG(a_dim=TRAIN_CONFIG['action_dim'],s_dim=TRAIN_CONFIG['state_dim'])
+    model = DQN_NAF(a_dim=TRAIN_CONFIG['action_dim'],s_dim=TRAIN_CONFIG['state_dim'])
     #load pre_trained model        
     if TRAIN_CONFIG['pre_trained']:
         load_model(model)
