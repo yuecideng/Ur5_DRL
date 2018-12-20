@@ -8,10 +8,10 @@ import torch
 import time
 
 #Traning hyperparameters 
-TRAIN_CONFIG = {'state_dim':8,'action_dim':5,'action_bound':pi/36,'train_epoch':500,'train_step':200,
+TRAIN_CONFIG = {'state_dim':13,'action_dim':5,'train_epoch':500,'train_step':200,
                 'pre_trained':False,'cuda':False}
 #Model name saved as date
-MODEL_DATE = '19_12_2018_naf/'
+MODEL_DATE = '20_12_2018/'
 MODEL_DATE_ = '20_12_2018/'
 PATH_TO_PLOT = '/home/waiyang/pana_RL_yueci/model_plot/'
 PATH_TO_MODEL = '/home/waiyang/pana_RL_yueci/model_para/'
@@ -31,11 +31,12 @@ def get_time(start_time):
 
 def main():
     env = Ur5()
-    #model = DDPG(a_dim=TRAIN_CONFIG['action_dim'],s_dim=TRAIN_CONFIG['state_dim'])
-    model = DQN_NAF(a_dim=TRAIN_CONFIG['action_dim'],s_dim=TRAIN_CONFIG['state_dim'])
+    model = DDPG(a_dim=TRAIN_CONFIG['action_dim'],s_dim=TRAIN_CONFIG['state_dim'])
+    #model = DQN_NAF(a_dim=TRAIN_CONFIG['action_dim'],s_dim=TRAIN_CONFIG['state_dim'])
     #load pre_trained model        
     if TRAIN_CONFIG['pre_trained']:
         load_model(model)
+        #model.load_model(MODEL_DATE_)
         #load noise data
         noise = np.loadtxt('/home/waiyang/pana_RL_yueci/noise.txt')
         model.noise.X = noise
@@ -50,14 +51,12 @@ def main():
         total_reward = 0
         for i in range(TRAIN_CONFIG['train_step']):
             action = model.choose_action(state)
-            state_, reward, terminal, reach = env.step(action)
+            state_, reward, terminal = env.step(action)
             model.store_transition(state,action,reward,state_)
             state = state_
             total_reward += reward
             if model.memory_counter > 1000:
                 model.Learn()
-            if reach == 1:
-                print 'reach succuss'
             if terminal:
                 state = env.reset()
             

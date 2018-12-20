@@ -42,7 +42,8 @@ class Actor(nn.Module):
         super(Actor, self).__init__()
         self.forward1 = nn.Linear(s_dim, 400)
         self.Relu = nn.ReLU()
-        self.forward2 = nn.Linear(400, a_dim)
+        self.forward2 = nn.Linear(400, 300)
+        self.forward3 = nn.Linear(300, a_dim)
         self.tanh = nn.Tanh()
         
         for m in self.modules():
@@ -53,10 +54,12 @@ class Actor(nn.Module):
     def forward(self, x):
         
         x = self.forward1(x)
-        x = self.Relu(x)
+        x = self.tanh(x)
         x = self.forward2(x)
-        x = F.normalize(x)
-        #x = self.tanh(x)
+        x = self.Relu(x)
+        x = self.forward3(x)
+        #x = F.normalize(x)
+        x = self.tanh(x)
 
         return x
 
@@ -64,9 +67,9 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Critic, self).__init__()
-        self.forward_s = nn.Linear(s_dim, 256)
-        self.forward_sa = nn.Linear(256+a_dim, 256)
-        self.forward1 = nn.Linear(256, 1)
+        self.forward_s = nn.Linear(s_dim, 400)
+        self.forward_sa = nn.Linear(400+a_dim, 300)
+        self.forward1 = nn.Linear(300, 1)
         self.Relu = nn.ReLU()
         
         for m in self.modules():
@@ -89,9 +92,9 @@ class DDPG(object):
             self,
             a_dim, 
             s_dim, 
-            LR_A = 0.01,    # learning rate for actor 0.001
-            LR_C = 0.01,    # learning rate for critic 0.005
-            GAMMA = 0.9,     # reward discount  0.9
+            LR_A = 0.0001,    # learning rate for actor 0.001
+            LR_C = 0.001,    # learning rate for critic 0.005
+            GAMMA = 0.99,     # reward discount  0.9
             TAU = 0.001,      # soft replacement  0.0001
             MEMORY_CAPACITY = 10000,
             BATCH_SIZE = 64,   #32
