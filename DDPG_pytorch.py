@@ -45,6 +45,8 @@ class Actor(nn.Module):
         self.forward2 = nn.Linear(400, 300)
         self.forward3 = nn.Linear(300, a_dim)
         self.tanh = nn.Tanh()
+        self.ln1 = nn.LayerNorm(400)
+        self.ln2 = nn.LayerNorm(300)
         
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -54,8 +56,10 @@ class Actor(nn.Module):
     def forward(self, x):
         
         x = self.forward1(x)
+        #x = self.ln1(x)
         x = self.tanh(x)
         x = self.forward2(x)
+        #x = self.ln2(x)
         x = self.Relu(x)
         x = self.forward3(x)
         #x = F.normalize(x)
@@ -139,34 +143,28 @@ class DDPG(object):
         self.memory[index, :] = transition
         self.memory_counter += 1
     
-    def choose_action(self, state):
+    def choose_action(self, state, noise=True):
         state = torch.from_numpy(state).float()
         state = state.view(1,-1)
         if self.gpu:
             state = state.to(self.cuda)
             action = self.actor(state.detach())[0]
-            action = action.cpu().numpy() + self.noise.sample() 
+            action = action.cpu().numpy()
+            if noise:
+                action += self.noise.sample() 
         else:
             action = self.actor(state.detach())[0]
-            action = action.detach().numpy() + self.noise.sample() 
+            action = action.detach().numpy()
+            if noise:
+                action += self.noise.sample() 
             
         return np.clip(action,-1,1)
     
-    def choose_action_target(self, state):
-        state = torch.from_numpy(state).float()
-        state = state.view(1, -1)
-        if self.gpu:
-            state = state.to(self.cuda)
-            action = self.actor_target(state.detach())[0]
-            action = action.cpu().numpy() 
-        else:
-            action = self.actor(state.detach())[0]
-            action = action.detach().numpy() 
-        return action
+
 
     def soft_update(self, target, source, tau):
         """
-        Copies the parameters from source network (x) to target network (y) using the below update
+        Copies the parameters from network to target network using the below update
         y = TAU*x + (1 - TAU)*y
         """
         for target_param, param in zip(target.parameters(), source.parameters()):
@@ -174,7 +172,7 @@ class DDPG(object):
 
     def hard_update(self, target, source):
         """
-        Copies the parameters from source network to target network
+        Copies the parameters from network to target network entirely
         """
         for target_param, param in zip(target.parameters(), source.parameters()):
 		    target_param.data.copy_(param.data)

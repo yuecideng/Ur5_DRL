@@ -3,16 +3,15 @@ from DDPG_pytorch import DDPG
 from DQN_NAF import DQN_NAF
 import numpy as np 
 import matplotlib.pyplot as plt
-from math import pi
 import torch
 import time
 
 #Traning hyperparameters 
-TRAIN_CONFIG = {'state_dim':13,'action_dim':5,'train_epoch':500,'train_step':200,
-                'pre_trained':False,'cuda':False}
+TRAIN_CONFIG = {'state_dim':10,'action_dim':5,'action_bound':np.pi/36,'train_epoch':500,'train_step':200,
+                'pre_trained':True,'cuda':False}
 #Model name saved as date
-MODEL_DATE = '20_12_2018/'
-MODEL_DATE_ = '20_12_2018/'
+MODEL_DATE = '21_12_2018_random/'
+MODEL_DATE_ = '21_12_2018_random/'
 PATH_TO_PLOT = '/home/waiyang/pana_RL_yueci/model_plot/'
 PATH_TO_MODEL = '/home/waiyang/pana_RL_yueci/model_para/'
 
@@ -51,11 +50,11 @@ def main():
         total_reward = 0
         for i in range(TRAIN_CONFIG['train_step']):
             action = model.choose_action(state)
-            state_, reward, terminal = env.step(action)
+            state_, reward, terminal = env.step(action*TRAIN_CONFIG['action_bound'])
             model.store_transition(state,action,reward,state_)
             state = state_
             total_reward += reward
-            if model.memory_counter > 1000:
+            if model.memory_counter > 100:
                 model.Learn()
             if terminal:
                 state = env.reset()

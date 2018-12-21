@@ -15,14 +15,14 @@ from copy import deepcopy
 JOINT_NAMES = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
                'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
 DURATION = 0.01
-GOAL = [-0.5,-0.5,1.5,-1.57,1.57,0]
+GOAL = [0.5,0.5,1.0,-1.57,1.57,0]
 INIT = [0,-pi/2,0,-pi/2,0,0]
 
 class Ur5(object):
     get_goal = False
     get_counter = 0
 
-    def __init__(self, init_joints=INIT, goal_pose=GOAL):
+    def __init__(self, init_joints=INIT, goal_pose=GOAL, duration=DURATION):
         rospy.init_node('ur5_env', anonymous=True)
         parameters = rospy.get_param(None)
         index = str(parameters).find('prefix')
@@ -37,12 +37,13 @@ class Ur5(object):
         self.initial= FollowJointTrajectoryGoal()
         self.initial.trajectory = JointTrajectory()
         self.initial.trajectory.joint_names = JOINT_NAMES
+        self.current_joints = init_joints
         self.initial.trajectory.points = [JointTrajectoryPoint(positions=INIT, velocities=[0]*6, 
-                                                                        time_from_start=rospy.Duration(DURATION))]                                                                
+                                                                        time_from_start=rospy.Duration(duration))]                                                                
         self.tf = TransformListener()                            
         self.goal_pose = np.array(goal_pose)
-        self.action_p = np.array(INIT)
-        self.action_delta = np.zeros(6)
+        self.base_pos = self.get_pos(link_name='base_link')
+        self.duration = duration
     
     def step(self,action):
         #Execute action 
@@ -50,45 +51,50 @@ class Ur5(object):
         goal.trajectory = JointTrajectory()
         goal.trajectory.joint_names = JOINT_NAMES
         #set action joint limit
-        action[2] = action[2] * 7 / 9 
-        action[3] = (action[3]-1)/2
-        action[4] = action[4] / 2
-        action *= pi
-        action = np.concatenate((action,0),axis=None)
-        goal.trajectory.points = [JointTrajectoryPoint(positions=action, velocities=[0]*6, 
-                                                                    time_from_start=rospy.Duration(DURATION))]
+        action_ = np.concatenate((action,0),axis=None)
+        self.current_joints += action_
+        action_sent = np.zeros(6)
+        #adjust joints degree  which has bound [-pi,pi]
+        for i in range(5):
+            #self.current_joints[i] = self.current_joints[i] % np.pi if self.current_joints[i] > 0 elif self.current_joints[i] % -np.pi
+            if self.current_joints[i] > np.pi:
+                action_sent[i] = self.current_joints[i] % -np.pi
+            elif self.current_joints[i] < -np.pi:
+                action_sent[i] = self.current_joints[i] % np.pi
+            else:
+                action_sent[i] = self.current_joints[i]
+        action_sent[2] = 0.8 * action_sent[2]
+        action_sent[3] = 0.5 * (action_sent[3] - np.pi)
+        action_sent[4] = 0.5 * action_sent[4]
+
+        goal.trajectory.points = [JointTrajectoryPoint(positions=action_sent, velocities=[0]*6, 
+                                                                    time_from_start=rospy.Duration(self.duration))]
         self.client.send_goal(goal)
         self.client.wait_for_result()
         position, rpy = self.get_pos(link_name='wrist_3_link')
-        self.action_delta = action - self.action_p
-        self.action_p = action
 
-        state = self.get_state()
-        reward, terminal = self.get_reward(position)
+        state = self.get_state(action)
+        reward, terminal = self.get_reward(position,action)
 
         return state, reward, terminal
 
     def reset(self):
+        self.current_joints = INIT
         self.get_point = False
-        self.grab_counter, self.action_delta = 0, np.zeros(6)
-        self.action_p = np.zeros(6)
+        self.grab_counter = 0
         self.client.send_goal(self.initial)
         self.client.wait_for_result()
-        rand_x, rand_y, rand_z= np.random.uniform(-0.1,0.1), np.random.uniform(-0.1,0.1), np.random.uniform(-0.4,0)
-        self.goal_pose = np.array(GOAL)
-        self.goal_pose[0] += rand_x
-        self.goal_pose[1] += rand_y
-        self.goal_pose[2] += rand_z
-        self.target_vis(self.goal_pose)
+        self.target_generate()
 
-        return self.get_state()
+        return self.get_state([0,0,0,0,0])
         #return np.array(position)
 
-    def get_state(self):
+    def get_state(self,action):
         goal_pose = self.goal_pose[:3]
-        joint_3 = self.get_pos(link_name='forearm_link')[0]
-        pose_3 = joint_3-goal_pose
-        dis_3 = np.linalg.norm(pose_3)
+        #joint_3 = self.get_pos(link_name='forearm_link')[0]
+        #pose_3 = joint_3-goal_pose
+        #dis_3 = np.linalg.norm(pose_3)
+        goal_dis = np.linalg.norm(goal_pose-self.base_pos)
         joint_6 = self.get_pos(link_name='wrist_3_link')[0]
         pose_6 = joint_6-goal_pose
         dis_6 = np.linalg.norm(pose_6)
@@ -96,32 +102,34 @@ class Ur5(object):
         in_point = 1 if self.get_counter > 0 else 0
         
         
-        state = np.concatenate((pose_3,pose_6,dis_6),axis=None)
+        state = np.concatenate((pose_6,dis_6,action,in_point),axis=None)
+        #state = np.concatenate((pose_6,goal_dis,action,in_point),axis=None)
         #state = state / np.linalg.norm(state)
 
-        return np.concatenate((state,self.action_delta[:5],in_point),axis=None)
+        return state
 
-    def get_reward(self,pos):
+    def get_reward(self,pos,action):
         target = self.goal_pose
         threshold = 20
         #Compute reward based on distance
         dis = np.linalg.norm(target[:3]-pos)
 
         #add regularization term
-        reward = -1*dis / 1 - np.linalg.norm(self.action_delta) / 10
+        reward = -0.1*dis - 0.01 * np.linalg.norm(action) 
         t = False
         
-        if dis < 0.15 and (not self.get_goal):
+        if dis < 0.1:
             reward += 1
             self.get_counter += 1
             print 'reach goal'
             if self.get_counter > threshold:
                 reward += 10.
-                self.get_goal = True
+                t = True
+                self.get_counter = 0
                 print 'reach completed'
-        elif dis > 0.15:
+        elif dis > 0.1:
             self.get_counter = 0
-            self.get_goal = False
+            
         #change buffer
 
         return reward, t
@@ -163,6 +171,15 @@ class Ur5(object):
                 pose.position.y = origin_pose.position.y #- 3.5 * unit + row * unit
                 pose.position.z = origin_pose.position.z
                 s(reel_name, reel_xml, "", pose, "world")
+        
+    def target_generate(self):
+        rand_x, rand_y, rand_z= np.random.uniform(-0.3,0.1), np.random.uniform(-0.3,0.1), np.random.uniform(-0.6,0.6)
+        self.goal_pose = np.array(GOAL)
+        self.goal_pose[0] += rand_x
+        self.goal_pose[1] += rand_y
+        self.goal_pose[2] += rand_z
+        self.target_vis(self.goal_pose)
+
 
 if __name__ == '__main__':
     arm = Ur5()
