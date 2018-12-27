@@ -6,9 +6,6 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 
-PATH_TO_MODEL = '/home/waiyang/pana_RL_yueci/model_para/'
-PATH_TO_PLOT = '/home/waiyang/pana_RL_yueci/model_plot/'
-
 ###############################  DDPG  ####################################
 def fanin_init(size, fanin=None):
 	fanin = fanin or size[0]
@@ -18,7 +15,7 @@ def fanin_init(size, fanin=None):
 
 class OrnsteinUhlenbeckActionNoise:
     '''Ornstein-Uhlenbeck process (Uhlenbeck & Ornstein, 1930) to generate 
-    temporally corre- lated exploration for exploration efficiency
+    temporally random process for exploration 
     '''
     def __init__(self, action_dim, mu = 0, theta = 0.15, sigma = 0.2):
 	    self.action_dim = action_dim
@@ -56,13 +53,10 @@ class Actor(nn.Module):
     def forward(self, x):
         
         x = self.forward1(x)
-        #x = self.ln1(x)
         x = self.tanh(x)
         x = self.forward2(x)
-        #x = self.ln2(x)
         x = self.Relu(x)
         x = self.forward3(x)
-        #x = F.normalize(x)
         x = self.tanh(x)
 
         return x
@@ -100,7 +94,7 @@ class DDPG(object):
             LR_C = 0.001,    # learning rate for critic 0.005
             GAMMA = 0.99,     # reward discount  0.9
             TAU = 0.001,      # soft replacement  0.0001
-            MEMORY_CAPACITY = 10000,
+            MEMORY_CAPACITY = 100000,
             BATCH_SIZE = 64,   #32
             cuda = False        
             ):
@@ -108,10 +102,12 @@ class DDPG(object):
         self.tau = TAU
         self.memory_size = MEMORY_CAPACITY
         self.batch_size = BATCH_SIZE
-        self.memory = np.zeros((MEMORY_CAPACITY, s_dim * 2 + a_dim + 1), dtype=np.float32)
+        #memory to store the [state,action,reward,next_state,done] transition
+        self.memory = np.zeros((MEMORY_CAPACITY, s_dim * 2 + a_dim + 2), dtype=np.float32)
 
         # initialize memory counter
         self.memory_counter = 0
+        #state and action dimension
         self.a_dim, self.s_dim = a_dim, s_dim
         self.noise = OrnsteinUhlenbeckActionNoise(self.a_dim)
         self.gpu = cuda
@@ -120,11 +116,10 @@ class DDPG(object):
         self.actor_target = Actor(s_dim, a_dim) 
         self.critic = Critic(s_dim, a_dim)
         self.critic_target = Critic(s_dim, a_dim)
-
+        
         self.optim_a = optim.Adam(self.actor.parameters(), LR_A)
         self.optim_c = optim.Adam(self.critic.parameters(), LR_C)
-        #self.optim_a = optim.SGD(self.actor.parameters(), LR_A, 0.9)
-        #self.optim_c = optim.SGD(self.critic.parameters(), LR_C, 0.9)
+    
         if self.gpu:
             self.cuda = torch.device("cuda")
             self.actor = self.actor.to(self.cuda)
@@ -137,8 +132,8 @@ class DDPG(object):
         self.loss_actor_list = []
         self.loss_critic_list = []
 
-    def store_transition(self, s, a, r, s_):
-        transition = np.hstack((s, a, [r], s_))
+    def store_transition(self, s, a, r, s_, done):
+        transition = np.hstack((s, a, [r], s_, [done]))
         index = self.memory_counter % self.memory_size  # replace the old memory with new memory
         self.memory[index, :] = transition
         self.memory_counter += 1
@@ -188,17 +183,17 @@ class DDPG(object):
             batch_memory = torch.from_numpy(batch_memory).to(self.cuda)
 
         s = batch_memory[:, :self.s_dim].float()
-        s_ = batch_memory[:, -self.s_dim:].float()
+        s_ = batch_memory[:, -self.s_dim-1:-1].float()
         a = batch_memory[:, self.s_dim:self.s_dim + self.a_dim].float()
         r = batch_memory[:, self.s_dim + self.a_dim].float()
-
+        d = batch_memory[:, -1]
 		# ---------------------- optimize critic ----------------------
 		# Use target actor exploitation policy here for loss evaluation
         a_ = self.actor_target(s_).detach()
         
         next_val = torch.squeeze(self.critic_target(s_, a_).detach())
 		# y_exp = r + gamma*Q'( s2, pi'(s2))
-        y_expected = r + self.gama * next_val
+        y_expected = r + self.gama * (1 - d) * next_val
 		# y_pred = Q( s1, a1)
         y_predicted = torch.squeeze(self.critic(s, a))
 		# compute critic loss, and update the critic
@@ -222,24 +217,32 @@ class DDPG(object):
         self.soft_update(self.actor_target, self.actor, self.tau)
         self.soft_update(self.critic_target, self.critic, self.tau)
        
-    def save_model(self, model_name):
-        torch.save(self.actor.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'actor.pth'))
-        torch.save(self.critic.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'critic.pth'))
-        torch.save(self.optim_a.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'optim_a.pth'))
-        torch.save(self.optim_c.state_dict(), os.path.join(PATH_TO_MODEL, model_name, 'optim_c.pth'))
+    def save_model(self,model_dir,model_name):
+        torch.save(self.actor.state_dict(), model_dir+model_name+'actor.pth')
+        torch.save(self.critic.state_dict(), model_dir+model_name+'critic.pth')
+        torch.save(self.optim_a.state_dict(), model_dir+model_name+'optim_a.pth')
+        torch.save(self.optim_c.state_dict(), model_dir+model_name+'optim_c.pth')
+    
+    def load_model(self,model_dir,model_name):
+        self.actor_target.load_state_dict(torch.load(model_dir+model_name+'actor.pth'))
+        self.critic_target.load_state_dict(torch.load(model_dir+model_name+'critic.pth'))
+        self.actor.load_state_dict(torch.load(model_dir+model_name+'actor.pth'))
+        self.critic.load_state_dict(torch.load(model_dir+model_name+'critic.pth'))
+        self.optim_a.load_state_dict(torch.load(model_dir+model_name+'optim_a.pth'))
+        self.optim_c.load_state_dict(torch.load(model_dir+model_name+'optim_c.pth'))
 
-    def plot_loss(self,model_name):
+    def plot_loss(self,model_dir,model_name):
         plt.figure()
         plt.plot(np.arange(len(self.loss_actor_list)),self.loss_actor_list )
         plt.ylabel('Loss_Actor')
         plt.xlabel('training step')
-        plt.savefig(PATH_TO_PLOT+model_name+'loss_actor.png')
+        plt.savefig(model_dir+model_name+'loss_actor.png')
 
         plt.figure()
         plt.plot(np.arange(len(self.loss_critic_list)),self.loss_critic_list )
         plt.ylabel('Loss_Critic')
         plt.xlabel('training step')
-        plt.savefig(PATH_TO_PLOT+model_name+'loss_critic.png')
+        plt.savefig(model_dir+model_name+'loss_critic.png')
 
 
 

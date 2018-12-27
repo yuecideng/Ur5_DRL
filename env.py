@@ -19,8 +19,8 @@ GOAL = [0.5,0.5,1.0,-1.57,1.57,0]
 INIT = [0,-pi/2,0,-pi/2,0,0]
 
 class Ur5(object):
-    get_goal = False
     get_counter = 0
+    #get_rotation = 0
 
     def __init__(self, init_joints=INIT, goal_pose=GOAL, duration=DURATION):
         rospy.init_node('ur5_env', anonymous=True)
@@ -44,6 +44,8 @@ class Ur5(object):
         self.goal_pose = np.array(goal_pose)
         self.base_pos = self.get_pos(link_name='base_link')
         self.duration = duration
+        self.state_dim = 10
+        self.action_dim = 5
     
     def step(self,action):
         #Execute action 
@@ -63,9 +65,9 @@ class Ur5(object):
                 action_sent[i] = self.current_joints[i] % np.pi
             else:
                 action_sent[i] = self.current_joints[i]
-        action_sent[2] = 0.8 * action_sent[2]
+        action_sent[2] = 0.9 * action_sent[2]
         action_sent[3] = 0.5 * (action_sent[3] - np.pi)
-        action_sent[4] = 0.5 * action_sent[4]
+        action_sent[4] = 0.7 * action_sent[4]
 
         goal.trajectory.points = [JointTrajectoryPoint(positions=action_sent, velocities=[0]*6, 
                                                                     time_from_start=rospy.Duration(self.duration))]
@@ -73,34 +75,28 @@ class Ur5(object):
         self.client.wait_for_result()
         position, rpy = self.get_pos(link_name='wrist_3_link')
 
-        state = self.get_state(action)
-        reward, terminal = self.get_reward(position,action)
+        state = self.get_state(action,position)
+        reward, terminal = self.get_reward(position,rpy,action)
 
         return state, reward, terminal
 
     def reset(self):
         self.current_joints = INIT
-        self.get_point = False
-        self.grab_counter = 0
         self.client.send_goal(self.initial)
         self.client.wait_for_result()
         self.target_generate()
+        position = self.get_pos(link_name='wrist_3_link')[0]
 
-        return self.get_state([0,0,0,0,0])
+        return self.get_state([0,0,0,0,0],position)
         #return np.array(position)
 
-    def get_state(self,action):
+    def get_state(self,action,position):
+        #x, y, z of goal
         goal_pose = self.goal_pose[:3]
-        #joint_3 = self.get_pos(link_name='forearm_link')[0]
-        #pose_3 = joint_3-goal_pose
-        #dis_3 = np.linalg.norm(pose_3)
-        goal_dis = np.linalg.norm(goal_pose-self.base_pos)
-        joint_6 = self.get_pos(link_name='wrist_3_link')[0]
-        pose_6 = joint_6-goal_pose
+        #goal_dis = np.linalg.norm(goal_pose-self.base_pos)
+        pose_6 = position - goal_pose
         dis_6 = np.linalg.norm(pose_6)
-
         in_point = 1 if self.get_counter > 0 else 0
-        
         
         state = np.concatenate((pose_6,dis_6,action,in_point),axis=None)
         #state = np.concatenate((pose_6,goal_dis,action,in_point),axis=None)
@@ -108,30 +104,34 @@ class Ur5(object):
 
         return state
 
-    def get_reward(self,pos,action):
-        target = self.goal_pose
+    def get_reward(self,pos,rpy,action):
         threshold = 20
-        #Compute reward based on distance
-        dis = np.linalg.norm(target[:3]-pos)
-
-        #add regularization term
-        reward = -0.1*dis - 0.01 * np.linalg.norm(action) 
         t = False
+        #Compute reward based on distance
+        dis = np.linalg.norm(self.goal_pose[:3]-pos)
+        #add regularization term
+        reward = -0.1 * dis - 0.01 * np.linalg.norm(action)
+        #compute reward based on rotation
+        dis_a = np.linalg.norm(self.goal_pose[3]-rpy[0])
+        r_a = -0.5 * dis_a 
         
         if dis < 0.1:
-            reward += 1
-            self.get_counter += 1
-            print 'reach goal'
+            reward += 1 + r_a
+            print 'reach distance'
+            if dis_a < 0.1:
+                reward += 2
+                print 'reach rotation'
+                self.get_counter += 1
+            else:
+                self.get_counter = 0
+
             if self.get_counter > threshold:
-                reward += 10.
+                reward += 10 
                 t = True
                 self.get_counter = 0
-                print 'reach completed'
-        elif dis > 0.1:
-            self.get_counter = 0
-            
-        #change buffer
-
+                print 'successfully complete task'
+                print '############################'
+        
         return reward, t
     
     def get_pos(self,link_name='ee_link',ref_link='world'):
@@ -143,7 +143,7 @@ class Ur5(object):
                     position, quaternion = self.tf.lookupTransform(ref_link, link_name, t)
                     rpy = euler_from_quaternion(quaternion)
             except:
-                pass
+                print 'fail to get data from tf'
 
         return np.array(position), np.array(rpy)
         
@@ -160,8 +160,6 @@ class Ur5(object):
         with open('/home/waiyang/pana_ws/src/Panasonic_UR5/pana_gazebo/worlds/reel_simple.sdf',"r") as f:
             reel_xml = f.read()
         
-        #for row in [2,4,5]:
-        #  for	col in xrange(0,1):
         for row in [1]:
             for	col in xrange(1):
                 reel_name = "reel_%d_%d" % (row,col)
@@ -173,7 +171,7 @@ class Ur5(object):
                 s(reel_name, reel_xml, "", pose, "world")
         
     def target_generate(self):
-        rand_x, rand_y, rand_z= np.random.uniform(-0.3,0.1), np.random.uniform(-0.3,0.1), np.random.uniform(-0.6,0.6)
+        rand_x, rand_y, rand_z= np.random.uniform(-0.3,0.1), np.random.uniform(-0.3,0.1), np.random.uniform(-0.6,0)
         self.goal_pose = np.array(GOAL)
         self.goal_pose[0] += rand_x
         self.goal_pose[1] += rand_y
@@ -183,6 +181,3 @@ class Ur5(object):
 
 if __name__ == '__main__':
     arm = Ur5()
-    while True:
-        arm.reset()
-        arm.step([2.2,0,-1.57,0,0,0])
