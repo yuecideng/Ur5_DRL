@@ -42,8 +42,6 @@ class Actor(nn.Module):
         self.forward2 = nn.Linear(400, 300)
         self.forward3 = nn.Linear(300, a_dim)
         self.tanh = nn.Tanh()
-        self.ln1 = nn.LayerNorm(400)
-        self.ln2 = nn.LayerNorm(300)
         
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -65,8 +63,8 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Critic, self).__init__()
-        self.forward_s = nn.Linear(s_dim, 400)
-        self.forward_sa = nn.Linear(400+a_dim, 300)
+        self.forward_s = nn.Linear(s_dim+a_dim, 400)
+        self.forward_sa = nn.Linear(400, 300)
         self.forward1 = nn.Linear(300, 1)
         self.Relu = nn.ReLU()
         
@@ -76,9 +74,9 @@ class Critic(nn.Module):
         self.forward1.weight.data.uniform_(-0.003, 0.003)
     
     def forward(self, x, a):
-        x = self.forward_s(x)
+        x = self.forward_s(torch.cat([x,a],1))
         x = self.Relu(x)
-        x = self.forward_sa(torch.cat([x,a],1))
+        x = self.forward_sa(x)
         x = self.Relu(x)
         x = self.forward1(x)
 
@@ -155,8 +153,6 @@ class DDPG(object):
             
         return np.clip(action,-1,1)
     
-
-
     def soft_update(self, target, source, tau):
         """
         Copies the parameters from network to target network using the below update

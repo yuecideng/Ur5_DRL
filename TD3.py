@@ -43,11 +43,6 @@ class Actor(nn.Module):
         self.forward3 = nn.Linear(300, a_dim)
         self.tanh = nn.Tanh()
         
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = fanin_init(m.weight.data.size())
-        self.forward2.weight.data.uniform_(-0.003, 0.003)
-        
     def forward(self, x):
         
         x = self.forward1(x)
@@ -63,24 +58,37 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Critic, self).__init__()
-        self.forward_sa = nn.Linear(s_dim+a_dim, 400)
-        self.forward1 = nn.Linear(400, 300)
-        self.forward2 = nn.Linear(300, 1)
+        self.forward1 = nn.Linear(s_dim+a_dim, 400)
+        self.forward2 = nn.Linear(400, 300)
+        self.forward3 = nn.Linear(300, 1)
+        self.forward4 = nn.Linear(s_dim+a_dim, 400)
+        self.forward5 = nn.Linear(400, 300)
+        self.forward6 = nn.Linear(300, 1)
         self.Relu = nn.ReLU()
         
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = fanin_init(m.weight.data.size())
-        self.forward1.weight.data.uniform_(-0.003, 0.003)
-    
     def forward(self, x, a):
-        x = self.forward_sa(torch.cat([x,a],1))
-        x = self.Relu(x)
-        x = self.forward1(x)
-        x = self.Relu(x)
-        x = self.forward2(x)
+        x1 = self.forward1(torch.cat([x,a],1))
+        x1 = self.Relu(x1)
+        x1 = self.forward2(x1)
+        x1 = self.Relu(x1)
+        x1 = self.forward3(x1)
 
-        return x
+        x2 = self.forward1(torch.cat([x,a],1))
+        x2 = self.Relu(x2)
+        x2 = self.forward2(x2)
+        x2 = self.Relu(x2)
+        x2 = self.forward3(x2)
+
+        return x1, x2
+
+    def Q1(self, x, a):
+        x1 = self.forward1(torch.cat([x,a],1))
+        x1 = self.Relu(x1)
+        x1 = self.forward2(x1)
+        x1 = self.Relu(x1)
+        x1 = self.forward3(x1)
+
+        return x1
 
 
 class TD3(object):
@@ -88,12 +96,12 @@ class TD3(object):
             self,
             a_dim, 
             s_dim, 
-            LR_A = 0.001,    # learning rate for actor 
+            LR_A = 0.0001,    # learning rate for actor 
             LR_C = 0.001,    # learning rate for critic 
             GAMMA = 0.99,     # reward discount  
             TAU = 0.005,      # soft replacement 
-            MEMORY_CAPACITY = 100000,
-            BATCH_SIZE = 64,   #32
+            MEMORY_CAPACITY = 10000,
+            BATCH_SIZE = 100,   #32
             act_noise = 0.1,
             target_noise = 0.2,
             noise_clip = 0.5,
@@ -115,32 +123,27 @@ class TD3(object):
         #state and action dimension
         self.a_dim, self.s_dim = a_dim, s_dim
         self.noise = OrnsteinUhlenbeckActionNoise(self.a_dim)
+        #set target noise with small sigma
+        self.noise_target = OrnsteinUhlenbeckActionNoise(self.a_dim,sigma=0.1)
         self.gpu = cuda
 
         self.actor = Actor(s_dim, a_dim)
         self.actor_target = Actor(s_dim, a_dim) 
-        self.critic1 = Critic(s_dim, a_dim)
-        self.critic1_target = Critic(s_dim, a_dim)
-        self.critic2 = Critic(s_dim, a_dim)
-        self.critic2_target = Critic(s_dim, a_dim)
+        self.critic = Critic(s_dim, a_dim)
+        self.critic_target = Critic(s_dim, a_dim)
 
-        
         self.optim_a = optim.Adam(self.actor.parameters(), LR_A)
-        self.optim_c1 = optim.Adam(self.critic1.parameters(), LR_C)
-        self.optim_c2 = optim.Adam(self.critic2.parameters(), LR_C)
+        self.optim_c = optim.Adam(self.critic.parameters(), LR_C)
     
         if self.gpu:
             self.cuda = torch.device("cuda")
             self.actor = self.actor.to(self.cuda)
             self.actor_target = self.actor_target.to(self.cuda)
-            self.critic1 = self.critic1.to(self.cuda)
-            self.critic1_target = self.critic1_target.to(self.cuda)
-            self.critic2 = self.critic2.to(self.cuda)
-            self.critic2_target = self.critic2_target.to(self.cuda)
-
+            self.critic = self.critic.to(self.cuda)
+            self.critic_target = self.critic_target.to(self.cuda)
+ 
         self.hard_update(self.actor_target, self.actor)
-        self.hard_update(self.critic1_target, self.critic1)
-        self.hard_update(self.critic2_target, self.critic2)
+        self.hard_update(self.critic_target, self.critic)
         self.loss_actor_list = []
         self.critic1_q = []
         self.critic2_q = []
@@ -156,18 +159,18 @@ class TD3(object):
         state = state.view(1,-1)
         if self.gpu:
             state = state.to(self.cuda)
-            action = self.actor(state.detach())[0]
+            action = self.actor(state.detach()).flatten()
             action = action.cpu().numpy()
             if noise:
                 #add Guassian noise
-                action += torch.FloatTensor(action).normal_(0, self.act_noise)
-                #action += self.noise.sample()
+                #action += np.random.normal(0,self.act_noise,self.a_dim)
+                action += self.noise.sample()
         else:
-            action = self.actor(state.detach())[0]
+            action = self.actor(state.detach()).flatten()
             action = action.detach().numpy()
             if noise:
-                action += torch.FloatTensor(action).normal_(0, self.act_noise)
-                #action += self.noise.sample()
+                #action += np.random.normal(0,self.act_noise,self.a_dim)
+                action += self.noise.sample()
             
         return np.clip(action,-1,1)
 
@@ -192,45 +195,40 @@ class TD3(object):
         else:
             sample_index = np.random.choice(self.memory_counter, size=self.batch_size)
         batch_memory = self.memory[sample_index, :]
-        batch_memory = torch.from_numpy(batch_memory)
+        batch_memory = torch.from_numpy(batch_memory).float()
         if self.gpu:
             batch_memory = torch.from_numpy(batch_memory).to(self.cuda)
 
-        s = batch_memory[:, :self.s_dim].float()
-        s_ = batch_memory[:, -self.s_dim-1:-1].float()
-        a = batch_memory[:, self.s_dim:self.s_dim + self.a_dim].float()
-        r = batch_memory[:, self.s_dim + self.a_dim].float()
-        d = batch_memory[:, -1]
+        s = batch_memory[:, :self.s_dim]
+        s_ = batch_memory[:, -self.s_dim-1:-1]
+        a = batch_memory[:, self.s_dim:self.s_dim + self.a_dim]
+        r = batch_memory[:, self.s_dim + self.a_dim].view(-1,1)
+        d = batch_memory[:, -1].view(-1,1)
 		# ---------------------- optimize critic ----------------------
 		# Use target actor exploitation policy here for loss evaluation
-        a_ = self.actor_target(s_).detach() + torch.clamp(torch.FloatTensor(a).normal_(0,self.target_noise),min=-self.noise_clip,max=self.noise_clip)
-        a_ = torch.clamp(a_,min=-1,max=1)
-
-        q1 = torch.squeeze(self.critic1_target(s_, a_).detach())
-        q2 = torch.squeeze(self.critic2_target(s_, a_).detach())
+        a_ = self.actor_target(s_) + torch.clamp(torch.from_numpy(self.noise_target.sample()).float(),
+                                                            min=-self.noise_clip,max=self.noise_clip)
+        a_ = torch.clamp(a_,min=-1,max=1).detach()
+        #a_ = self.actor_target(s_)
+        q1, q2 = self.critic_target(s_, a_)
+        q_ = torch.min(q1,q2)
 		# y_exp = r + gamma*Q'( s2, pi'(s2))
-        y_expected = r + self.gama * (1 - d) * torch.min(q1,q2)
+        y_expected = r + (self.gama * (1-d) * q_).detach()
 		# y_pred = Q( s1, a1)
-        y_predicted1 = torch.squeeze(self.critic1(s, a))
-        y_predicted2 = torch.squeeze(self.critic2(s, a))
+        y_predicted1, y_predicted2 = self.critic(s, a)
 		# compute critic loss, and update the critic
-		#loss_critic = F.smooth_l1_loss(y_predicted, y_expected)
-        loss_critic1 = F.mse_loss(y_predicted1, y_expected)
-        loss_critic2 = F.mse_loss(y_predicted2, y_expected)
-        self.optim_c1.zero_grad()
-        self.optim_c2.zero_grad()
-        loss_critic1.backward()
-        loss_critic2.backward()
-        self.optim_c1.step()
-        self.optim_c2.step()
-
+        loss_critic = F.mse_loss(y_predicted1, y_expected) + F.mse_loss(y_predicted2, y_expected)
+        self.optim_c.zero_grad()
+        loss_critic.backward()
+        self.optim_c.step()
+      
         self.critic1_q.append(torch.mean(y_predicted1))
         self.critic2_q.append(torch.mean(y_predicted2))
         
 		# ---------------------- optimize actor ----------------------
         if self.memory_counter % self.policy_delay == 0:
             pred_a = self.actor(s)
-            loss_actor = -1 * torch.mean(self.critic1(s, pred_a))
+            loss_actor = -self.critic.Q1(s, pred_a).mean()
             self.optim_a.zero_grad()
             loss_actor.backward()
             self.optim_a.step()
@@ -238,27 +236,21 @@ class TD3(object):
 
             # ------------------ update target network ------------------
             self.soft_update(self.actor_target, self.actor, self.tau)
-            self.soft_update(self.critic1_target, self.critic1, self.tau)
-            self.soft_update(self.critic2_target, self.critic2, self.tau)
+            self.soft_update(self.critic_target, self.critic, self.tau)
        
     def save_model(self,model_dir,model_name):
         torch.save(self.actor.state_dict(), model_dir+model_name+'actor.pth')
-        torch.save(self.critic1.state_dict(), model_dir+model_name+'critic1.pth')
-        torch.save(self.critic2.state_dict(), model_dir+model_name+'critic2.pth')
+        torch.save(self.critic.state_dict(), model_dir+model_name+'critic.pth')
         torch.save(self.optim_a.state_dict(), model_dir+model_name+'optim_a.pth')
-        torch.save(self.optim_c1.state_dict(), model_dir+model_name+'optim_c1.pth')
-        torch.save(self.optim_c2.state_dict(), model_dir+model_name+'optim_c2.pth')
+        torch.save(self.optim_c.state_dict(), model_dir+model_name+'optim_c.pth')
 
     def load_model(self,model_dir,model_name):
         self.actor_target.load_state_dict(torch.load(model_dir+model_name+'actor.pth'))
-        self.critic1_target.load_state_dict(torch.load(model_dir+model_name+'critic1.pth'))
-        self.critic2_target.load_state_dict(torch.load(model_dir+model_name+'critic2.pth'))
+        self.critic_target.load_state_dict(torch.load(model_dir+model_name+'critic.pth'))
         self.actor.load_state_dict(torch.load(model_dir+model_name+'actor.pth'))
-        self.critic1.load_state_dict(torch.load(model_dir+model_name+'critic1.pth'))
-        self.critic2.load_state_dict(torch.load(model_dir+model_name+'critic2.pth'))
+        self.critic.load_state_dict(torch.load(model_dir+model_name+'critic.pth'))
         self.optim_a.load_state_dict(torch.load(model_dir+model_name+'optim_a.pth'))
-        self.optim_c1.load_state_dict(torch.load(model_dir+model_name+'optim_c1.pth'))
-        self.optim_c2.load_state_dict(torch.load(model_dir+model_name+'optim_c2.pth'))
+        self.optim_c.load_state_dict(torch.load(model_dir+model_name+'optim_c.pth'))
 
     def plot_loss(self,model_dir,model_name):
         plt.figure()
@@ -278,7 +270,3 @@ class TD3(object):
         plt.ylabel('Q value')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'Q_critic2.png')
-
-
-
-
