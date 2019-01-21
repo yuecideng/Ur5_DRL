@@ -38,10 +38,9 @@ class Actor(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Actor, self).__init__()
         self.forward1 = nn.Linear(s_dim, 400)
-        self.Relu = nn.ReLU()
         self.forward2 = nn.Linear(400, 300)
         self.forward3 = nn.Linear(300, a_dim)
-        self.tanh = nn.Tanh()
+        self.Relu = nn.ReLU()
         
     def forward(self, x):
         
@@ -96,11 +95,11 @@ class TD3(object):
             self,
             a_dim, 
             s_dim, 
-            LR_A = 0.0001,    # learning rate for actor 
+            LR_A = 0.001,    # learning rate for actor 
             LR_C = 0.001,    # learning rate for critic 
             GAMMA = 0.99,     # reward discount  
             TAU = 0.005,      # soft replacement 
-            MEMORY_CAPACITY = 10000,
+            MEMORY_CAPACITY = 100000,
             BATCH_SIZE = 100,   #32
             act_noise = 0.1,
             target_noise = 0.2,
@@ -159,16 +158,16 @@ class TD3(object):
         state = state.view(1,-1)
         if self.gpu:
             state = state.to(self.cuda)
-            action = self.actor(state.detach()).flatten()
-            action = action.cpu().numpy()
+            action = self.actor(state).flatten()
+            action = action.cpu().detach().numpy()
             if noise:
-                #add Guassian noise
                 #action += np.random.normal(0,self.act_noise,self.a_dim)
                 action += self.noise.sample()
         else:
-            action = self.actor(state.detach()).flatten()
+            action = self.actor(state).flatten()
             action = action.detach().numpy()
             if noise:
+                #add Guassian noise
                 #action += np.random.normal(0,self.act_noise,self.a_dim)
                 action += self.noise.sample()
             
@@ -197,7 +196,7 @@ class TD3(object):
         batch_memory = self.memory[sample_index, :]
         batch_memory = torch.from_numpy(batch_memory).float()
         if self.gpu:
-            batch_memory = torch.from_numpy(batch_memory).to(self.cuda)
+            batch_memory = batch_memory.to(self.cuda)
 
         s = batch_memory[:, :self.s_dim]
         s_ = batch_memory[:, -self.s_dim-1:-1]
@@ -258,15 +257,18 @@ class TD3(object):
         plt.ylabel('Loss_Actor')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'loss_actor.png')
+        plt.close()
 
         plt.figure()
         plt.plot(np.arange(len(self.critic1_q)),self.critic1_q)
         plt.ylabel('Q value')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'Q_critic1.png')
+        plt.close()
 
         plt.figure()
         plt.plot(np.arange(len(self.critic2_q)),self.critic2_q)
         plt.ylabel('Q value')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'Q_critic2.png')
+        plt.close()

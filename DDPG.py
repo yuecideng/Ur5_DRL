@@ -63,9 +63,9 @@ class Actor(nn.Module):
 class Critic(nn.Module):
     def __init__(self, s_dim, a_dim):
         super(Critic, self).__init__()
-        self.forward_s = nn.Linear(s_dim+a_dim, 400)
-        self.forward_sa = nn.Linear(400, 300)
-        self.forward1 = nn.Linear(300, 1)
+        self.forward1 = nn.Linear(s_dim, 400)
+        self.forward2 = nn.Linear(400+a_dim, 300)
+        self.forward3 = nn.Linear(300, 1)
         self.Relu = nn.ReLU()
         
         for m in self.modules():
@@ -74,11 +74,11 @@ class Critic(nn.Module):
         self.forward1.weight.data.uniform_(-0.003, 0.003)
     
     def forward(self, x, a):
-        x = self.forward_s(torch.cat([x,a],1))
-        x = self.Relu(x)
-        x = self.forward_sa(x)
-        x = self.Relu(x)
         x = self.forward1(x)
+        x = self.Relu(x)
+        x = self.forward2(torch.cat([x,a],1))
+        x = self.Relu(x)
+        x = self.forward3(x)
 
         return x
 
@@ -93,7 +93,7 @@ class DDPG(object):
             GAMMA = 0.99,     # reward discount  0.9
             TAU = 0.001,      # soft replacement  0.0001
             MEMORY_CAPACITY = 100000,
-            BATCH_SIZE = 64,   #32
+            BATCH_SIZE = 64,   
             cuda = False        
             ):
         self.gama = GAMMA
@@ -128,7 +128,8 @@ class DDPG(object):
         self.hard_update(self.actor_target, self.actor)
         self.hard_update(self.critic_target, self.critic)
         self.loss_actor_list = []
-        self.loss_critic_list = []
+        #Q value of critic
+        self.critic_q = []
 
     def store_transition(self, s, a, r, s_, done):
         transition = np.hstack((s, a, [r], s_, [done]))
@@ -141,12 +142,12 @@ class DDPG(object):
         state = state.view(1,-1)
         if self.gpu:
             state = state.to(self.cuda)
-            action = self.actor(state.detach())[0]
+            action = self.actor(state)[0]
             action = action.cpu().numpy()
             if noise:
                 action += self.noise.sample() 
         else:
-            action = self.actor(state.detach())[0]
+            action = self.actor(state)[0]
             action = action.detach().numpy()
             if noise:
                 action += self.noise.sample() 
@@ -174,31 +175,30 @@ class DDPG(object):
         else:
             sample_index = np.random.choice(self.memory_counter, size=self.batch_size)
         batch_memory = self.memory[sample_index, :]
-        batch_memory = torch.from_numpy(batch_memory)
+        batch_memory = torch.from_numpy(batch_memory).float()
         if self.gpu:
-            batch_memory = torch.from_numpy(batch_memory).to(self.cuda)
+            batch_memory = torch.batch_memory.to(self.cuda)
 
-        s = batch_memory[:, :self.s_dim].float()
-        s_ = batch_memory[:, -self.s_dim-1:-1].float()
-        a = batch_memory[:, self.s_dim:self.s_dim + self.a_dim].float()
-        r = batch_memory[:, self.s_dim + self.a_dim].float()
-        d = batch_memory[:, -1]
+        s = batch_memory[:, :self.s_dim]
+        s_ = batch_memory[:, -self.s_dim-1:-1]
+        a = batch_memory[:, self.s_dim:self.s_dim + self.a_dim]
+        r = batch_memory[:, self.s_dim + self.a_dim].view(-1,1)
+        d = batch_memory[:, -1].view(-1,1)
 		# ---------------------- optimize critic ----------------------
 		# Use target actor exploitation policy here for loss evaluation
         a_ = self.actor_target(s_).detach()
-        
-        next_val = torch.squeeze(self.critic_target(s_, a_).detach())
+        next_val = self.critic_target(s_, a_).detach()
 		# y_exp = r + gamma*Q'( s2, pi'(s2))
         y_expected = r + self.gama * (1 - d) * next_val
 		# y_pred = Q( s1, a1)
-        y_predicted = torch.squeeze(self.critic(s, a))
+        y_predicted = self.critic(s, a)
 		# compute critic loss, and update the critic
 		#loss_critic = F.smooth_l1_loss(y_predicted, y_expected)
         loss_critic = F.mse_loss(y_predicted, y_expected)
         self.optim_c.zero_grad()
         loss_critic.backward()
         self.optim_c.step()
-        self.loss_critic_list.append(loss_critic)
+        self.critic_q.append(torch.mean(y_predicted))
         
 		# ---------------------- optimize actor ----------------------
         pred_a = self.actor(s)
@@ -233,12 +233,14 @@ class DDPG(object):
         plt.ylabel('Loss_Actor')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'loss_actor.png')
+        plt.close()
 
         plt.figure()
-        plt.plot(np.arange(len(self.loss_critic_list)),self.loss_critic_list )
-        plt.ylabel('Loss_Critic')
+        plt.plot(np.arange(len(self.critic_q)),self.critic_q)
+        plt.ylabel('Q of Critic')
         plt.xlabel('training step')
-        plt.savefig(model_dir+model_name+'loss_critic.png')
+        plt.savefig(model_dir+model_name+'critic_Q.png')
+        plt.close()
 
 
 

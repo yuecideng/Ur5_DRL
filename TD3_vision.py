@@ -234,7 +234,7 @@ class TD3_vision(object):
         d = batch_memory[:, -1].view(-1,1)
 		# ---------------------- optimize critic ----------------------
 		# Use target actor exploitation policy here for loss evaluation
-        if self.cuda:
+        if self.gpu:
             a_ = self.actor_target(f_,s_) + torch.clamp(torch.from_numpy(self.noise_target.sample()).float(),
                                                                     min=-self.noise_clip,max=self.noise_clip).to(self.cuda)
         else:
@@ -290,15 +290,18 @@ class TD3_vision(object):
         plt.ylabel('Loss_Actor')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'loss_actor.png')
+        plt.close()
 
         plt.figure()
         plt.plot(np.arange(len(self.critic1_q)),self.critic1_q)
         plt.ylabel('Q value')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'Q_critic1.png')
+        plt.close()
 
         plt.figure()
         plt.plot(np.arange(len(self.critic2_q)),self.critic2_q)
         plt.ylabel('Q value')
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'Q_critic2.png')
+        plt.close()
