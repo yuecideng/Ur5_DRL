@@ -272,3 +272,11 @@ class TD3(object):
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'Q_critic2.png')
         plt.close()
+
+    def mode(self, mode='train'):
+        if mode == 'train':
+            self.actor.train()
+            self.critic.train()
+        if mode == 'test':
+            self.actor.eval()
+            self.critic.eval()

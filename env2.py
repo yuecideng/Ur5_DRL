@@ -1,5 +1,6 @@
 '''
 This environment is used for gripping object with obstacle
+##########################################################
 command for launch the gazebo world: roslaunch pana_gazebo pana_ur5_joint_limited.launch 
 '''
 import numpy as np 
@@ -23,11 +24,15 @@ import cv2
 
 JOINT_NAMES = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
                'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+#joint motion duration
 DURATION = 0.01
-GOAL = [0.5,0,1.4,-1.57,1.57,0] 
+#Target postion: GOAL[:3] & Target rotation: GOAL[3:5]
+GOAL = [0.5,0,1.5,-1.57,1.57,0] 
+#initial joint angle
 INIT = [0,-pi/2,0,-pi/2,0,0]
 
 class Ur5_vision(object):
+    #flags for position reaching and rotation reaching, set to 1 if reaching
     get_counter = 0
     get_rotation = 0
 
@@ -40,8 +45,10 @@ class Ur5_vision(object):
             for i, name in enumerate(JOINT_NAMES):
                 JOINT_NAMES[i] = prefix + name
 
+        self.vision = rospy.Subscriber("/camera1/color/image_raw", Image, self.do_nothing)
         self.spawn = rospy.ServiceProxy("gazebo/spawn_sdf_model", SpawnModel)
         self.delete_model = rospy.ServiceProxy("gazebo/delete_model", DeleteModel)
+        #Define Subsriber for contact sensor plugin 
         self.collision = rospy.Subscriber('/contact_sensor_plugin/contact_info',UInt16,self.callback)
         self.client = actionlib.SimpleActionClient('/arm_controller/follow_joint_trajectory',
                                                                 FollowJointTrajectoryAction)
@@ -61,28 +68,36 @@ class Ur5_vision(object):
         self.duration = duration
         self.termination = 0
         self.state_dim = 16
+        #action dimension is 5. action is the 5 joint increment of UR5
         self.action_dim = 5
         self.receive = False
         #initilize frame buffer
         self.frame_buffer = np.empty([4,64,64], dtype=np.float32)
+        #record the success step
+        self.steps = 0
+        self.steps_list = []
+        self.threshold = 5 #default = 10
+        #close gripper
         self.gripper(action=[1.0])
-        
+
     def callback(self, msg):
         if self.receive:
             self.termination = msg.data
 
+    def do_nothing(self, data):
+        pass
+
     def step(self,action):
-        #Execute action 
+        self.steps += 1
         goal = FollowJointTrajectoryGoal()
         goal.trajectory = JointTrajectory()
         goal.trajectory.joint_names = JOINT_NAMES
-        #set action joint limit
+        #add wrist_3_joint with 0 to the action
         action_ = np.concatenate((action,0),axis=None)
         self.current_joints += action_
         action_sent = np.zeros(6)
         #adjust joints degree  which has bound [-pi,pi]
         for i in range(5):
-            #self.current_joints[i] = self.current_joints[i] % np.pi if self.current_joints[i] > 0 elif self.current_joints[i] % -np.pi
             if self.current_joints[i] > np.pi:
                 action_sent[i] = self.current_joints[i] % -np.pi
             elif self.current_joints[i] < -np.pi:
@@ -90,16 +105,21 @@ class Ur5_vision(object):
             else:
                 action_sent[i] = self.current_joints[i]
         #set constraint for joints
+        #elbow_joint: [-0.7*pi,0.7*pi]
         action_sent[2] = 0.7 * action_sent[2]
+        #wrist_3_joint: [-pi,0]
         action_sent[3] = 0.5 * (action_sent[3] - np.pi)
         #action_sent[4] = 0.7 * action_sent[4]
-
+        #sent joint to controller
         goal.trajectory.points = [JointTrajectoryPoint(positions=action_sent, velocities=[0]*6, 
                                                                     time_from_start=rospy.Duration(self.duration))]
         self.client.send_goal(goal)
         self.client.wait_for_result()
-        position, rpy = self.get_pos(link_name='wrist_3_link')
+        #get position of end effector
+        position, rpy = self.get_pos()
+        #get vision frames as 3D state
         vision_frames = self.get_vision_frames()
+        #get low dimension state
         state = self.get_state(action,position,action_sent[:5])
         reward, terminal = self.get_reward(position,rpy,action)
 
@@ -107,19 +127,24 @@ class Ur5_vision(object):
 
     def reset(self):
         self.current_joints = INIT
-        self.get_counter, self.get_rotation, self.termination = 0, 0, 0
+        self.get_counter, self.get_rotation, self.termination, self.steps = 0, 0, 0, 0
         self.delete_model("object")
         self.delete_model("obstacle")
         self.client.send_goal(self.initial)
         self.client.wait_for_result()
+        #start to receive data from contact sensor plguin
         self.receive = True
         self.target_generate()
         vision_frames = self.get_vision_frames(work=False)
-        position, rpy = self.get_pos(link_name='wrist_3_link')
+        position = self.get_pos()[0]
 
         return vision_frames, self.get_state([0,0,0,0,0],position,self.current_joints[:5])
 
     def get_state(self,action,position,current_joints):
+        '''
+        Function for obtaining the state (low dimension)
+        Input: action of last time step
+        '''
         #x, y, z of goal
         goal_pose = self.goal_pose[:3]
         #goal_dis = np.linalg.norm(goal_pose-self.base_pos)
@@ -136,18 +161,18 @@ class Ur5_vision(object):
         return state
 
     def get_reward(self,pos,rpy,action):
-        threshold = 10
         t = False
         #Compute reward based on distance
         dis = np.linalg.norm(self.goal_pose[:3]-pos)
-        #add regularization term
-        reward = -0.1 * dis - 0.01 * np.linalg.norm(action)
         #compute reward based on rotation
-        dis_a = np.linalg.norm(self.goal_pose[3]-rpy[0])
-        r_a = -0.1 * dis_a 
+        dis_a = np.linalg.norm(self.goal_pose[4]-rpy[1])
+        #r_a = -0.1 * dis_a
+        r_a = 0.01 / dis_a
+        #add regularization term
+        reward = -0.1 * dis - 0.01 * np.linalg.norm(action) + r_a
         
         if dis < 0.05:
-            reward += 1 + r_a
+            reward += 1 
             self.get_counter += 1
             print 'reach target'
             if dis_a < 0.05:
@@ -157,9 +182,10 @@ class Ur5_vision(object):
             else:
                 self.get_rotation = 0
 
-            if self.get_rotation > threshold:
-                reward += 10
+            if self.get_rotation > self.threshold:
+                reward += 5
                 t = True
+                self.steps_list.append(self.steps)
                 print 'successfully complete task'
                 print '############################'
         else:
@@ -215,11 +241,9 @@ class Ur5_vision(object):
         return vision
 
     def target_vis(self,goal):
-        rospy.wait_for_service("gazebo/delete_model")
-        rospy.wait_for_service("gazebo/spawn_sdf_model")
         #orient of both object and obstacle
         orient = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, 0))
-        origin_pose1 = Pose(Point(goal[0],goal[1],goal[2]), orient)
+        origin_pose1 = Pose(Point(goal[0],goal[1],goal[2]-0.2), orient)
         origin_pose2 = Pose(Point(0.4,np.random.uniform(-0.2,0.2) ,1.2), orient)
 
         with open('/home/waiyang/pana_ws/src/Panasonic_UR5/pana_gazebo/worlds/reel_simple.sdf',"r") as f:
@@ -263,6 +287,43 @@ class Ur5_vision(object):
         except KeyboardInterrupt:
             self.client_gripper.cancel_goal()
             raise
+    
+    def uniform_exploration(self, action):
+        goal = FollowJointTrajectoryGoal()
+        goal.trajectory = JointTrajectory()
+        goal.trajectory.joint_names = JOINT_NAMES
+        #add wrist_3_joint with 0 to the action
+        action_ = np.concatenate((action,0),axis=None)
+        self.current_joints += action_
+        action_sent = np.zeros(6)
+        #adjust joints degree  which has bound [-pi,pi]
+        for i in range(5):
+            if self.current_joints[i] > np.pi:
+                action_sent[i] = self.current_joints[i] % -np.pi
+            elif self.current_joints[i] < -np.pi:
+                action_sent[i] = self.current_joints[i] % np.pi
+            else:
+                action_sent[i] = self.current_joints[i]
+        #set constraint for joints
+        #elbow_joint: [-0.7*pi,0.7*pi]
+        action_sent[2] = 0.7 * action_sent[2]
+        #wrist_3_joint: [-pi,0]
+        action_sent[3] = 0.5 * (action_sent[3] - np.pi)
+        #action_sent[4] = 0.7 * action_sent[4]
+        #sent joint to controller
+        goal.trajectory.points = [JointTrajectoryPoint(positions=action_sent, velocities=[0]*6, 
+                                                                    time_from_start=rospy.Duration(self.duration))]
+        self.client.send_goal(goal)
+        self.client.wait_for_result()
+        #get position of end effector
+        position, rpy = self.get_pos()
+        #get vision frames as 3D state
+        vision_frames = self.get_vision_frames()
+        #get low dimension state
+        state = self.get_state(action,position,action_sent[:5])
+        reward, terminal = self.get_reward(position,rpy,action)
+
+        return vision_frames, state, action, reward, terminal
         
 
 if __name__ == '__main__':

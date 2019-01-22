@@ -149,7 +149,6 @@ class TD3_vision(object):
         self.actor_target = Actor(s_dim, a_dim) 
         self.critic = Critic(s_dim, a_dim)
         self.critic_target = Critic(s_dim, a_dim)
-
         self.optim_a = optim.Adam(self.actor.parameters(), LR_A)
         self.optim_c = optim.Adam(self.critic.parameters(), LR_C)
     
@@ -305,3 +304,11 @@ class TD3_vision(object):
         plt.xlabel('training step')
         plt.savefig(model_dir+model_name+'Q_critic2.png')
         plt.close()
+    
+    def mode(self, mode='train'):
+        if mode == 'train':
+            self.actor.train()
+            self.critic.train()
+        if mode == 'test':
+            self.actor.eval()
+            self.critic.eval()

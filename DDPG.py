@@ -242,6 +242,14 @@ class DDPG(object):
         plt.savefig(model_dir+model_name+'critic_Q.png')
         plt.close()
 
+    def mode(self, mode='train'):
+        if mode == 'train':
+            self.actor.train()
+            self.critic.train()
+        if mode == 'test':
+            self.actor.eval()
+            self.critic.eval()
+
 
 
 
