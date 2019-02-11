@@ -45,9 +45,8 @@ class Ur5_vision(object):
             for i, name in enumerate(JOINT_NAMES):
                 JOINT_NAMES[i] = prefix + name
 
-        self.vision = rospy.Subscriber("/camera1/color/image_raw", Image, self.do_nothing)
-        self.spawn = rospy.ServiceProxy("gazebo/spawn_sdf_model", SpawnModel)
-        self.delete_model = rospy.ServiceProxy("gazebo/delete_model", DeleteModel)
+        self.spawn = rospy.ServiceProxy("gazebo/spawn_sdf_model", SpawnModel,persistent=True)
+        self.delete_model = rospy.ServiceProxy("gazebo/delete_model", DeleteModel,persistent=True)
         #Define Subsriber for contact sensor plugin 
         self.collision = rospy.Subscriber('/contact_sensor_plugin/contact_info',UInt16,self.callback)
         self.client = actionlib.SimpleActionClient('/arm_controller/follow_joint_trajectory',
@@ -84,9 +83,6 @@ class Ur5_vision(object):
         if self.receive:
             self.termination = msg.data
 
-    def do_nothing(self, data):
-        pass
-
     def step(self,action):
         self.steps += 1
         goal = FollowJointTrajectoryGoal()
@@ -96,7 +92,7 @@ class Ur5_vision(object):
         action_ = np.concatenate((action,0),axis=None)
         self.current_joints += action_
         action_sent = np.zeros(6)
-        #adjust joints degree  which has bound [-pi,pi]
+        #force joints degree into the bound [-pi,pi]
         for i in range(5):
             if self.current_joints[i] > np.pi:
                 action_sent[i] = self.current_joints[i] % -np.pi
@@ -104,32 +100,33 @@ class Ur5_vision(object):
                 action_sent[i] = self.current_joints[i] % np.pi
             else:
                 action_sent[i] = self.current_joints[i]
-        #set constraint for joints
+        #-----set constraint for joints-----
         #elbow_joint: [-0.7*pi,0.7*pi]
         action_sent[2] = 0.7 * action_sent[2]
         #wrist_3_joint: [-pi,0]
         action_sent[3] = 0.5 * (action_sent[3] - np.pi)
         #action_sent[4] = 0.7 * action_sent[4]
+        #------------------------------------
         #sent joint to controller
         goal.trajectory.points = [JointTrajectoryPoint(positions=action_sent, velocities=[0]*6, 
                                                                     time_from_start=rospy.Duration(self.duration))]
         self.client.send_goal(goal)
         self.client.wait_for_result()
-        #get position of end effector
+        #get position and rotation of end effector
         position, rpy = self.get_pos()
         #get vision frames as 3D state
         vision_frames = self.get_vision_frames()
         #get low dimension state
         state = self.get_state(action,position,action_sent[:5])
+        #get reward and terminal condition
         reward, terminal = self.get_reward(position,rpy,action)
 
         return vision_frames, state, reward, terminal
 
     def reset(self):
+        #initialize some variables
         self.current_joints = INIT
         self.get_counter, self.get_rotation, self.termination, self.steps = 0, 0, 0, 0
-        self.delete_model("object")
-        self.delete_model("obstacle")
         self.client.send_goal(self.initial)
         self.client.wait_for_result()
         #start to receive data from contact sensor plguin
@@ -169,10 +166,10 @@ class Ur5_vision(object):
         #r_a = -0.1 * dis_a
         r_a = 0.01 / dis_a
         #add regularization term
-        reward = -0.1 * dis - 0.01 * np.linalg.norm(action) + r_a
+        reward = -0.1 * dis - 0.01 * np.linalg.norm(action)
         
         if dis < 0.05:
-            reward += 1 
+            reward += 1 + r_a
             self.get_counter += 1
             print 'reach target'
             if dis_a < 0.05:
@@ -220,14 +217,17 @@ class Ur5_vision(object):
         img = None
         while img is None:
             try:
-                img = rospy.wait_for_message('/camera1/color/image_raw', Image)
+                #img = rospy.wait_for_message('/camera1/color/image_raw', Image)
+                img = rospy.wait_for_message('/camera1/depth/image_raw', Image)
             except:
                 print 'fail to get data from camera'
 
-        img = CvBridge().imgmsg_to_cv2(img, "mono8")
+        #img = CvBridge().imgmsg_to_cv2(img, "mono8")
+        img = CvBridge().imgmsg_to_cv2(img, "32FC1")
         img = cv2.resize(img,(64,64))
         #normolizae pixel into [0,1]
-        img = img / 255.0
+        #img = img / 255.0
+        cv2.normalize(img, img, 0, 1, cv2.NORM_MINMAX)
         #group 4 frames as observation
         if work:
             for i in range(self.frame_buffer.shape[0]-1):
@@ -241,6 +241,20 @@ class Ur5_vision(object):
         return vision
 
     def target_vis(self,goal):
+        ##################################################
+        #delete model from gazebo world
+        rospy.wait_for_service("gazebo/delete_model")
+        delete_model = rospy.ServiceProxy("gazebo/delete_model", DeleteModel)
+        try:
+            delete_model("object")
+        except (rospy.ServiceException) as e:
+            print "gazebo/delete_model service call failed (object)"
+        #rospy.wait_for_service("gazebo/delete_model",timeout=5)
+        try:
+            delete_model("obstacle")
+        except (rospy.ServiceException) as e:
+            print "gazebo/delete_model service call failed (obstacle)"
+        ####################################################
         #orient of both object and obstacle
         orient = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, 0))
         origin_pose1 = Pose(Point(goal[0],goal[1],goal[2]-0.2), orient)
@@ -256,14 +270,23 @@ class Ur5_vision(object):
         pose1.position.x = origin_pose1.position.x #- 3.5 * unit + col * unit
         pose1.position.y = origin_pose1.position.y #- 3.5 * unit + row * unit
         pose1.position.z = origin_pose1.position.z
-        self.spawn(name1, xml1, "", pose1, "world")
+        rospy.wait_for_service("gazebo/spawn_sdf_model",timeout=5)
+        try:
+            self.spawn(name1, xml1, "", pose1, "world")
+        except (rospy.ServiceException) as e:
+            print "gazebo/spawn_sdf_model service call failed (object)"
 
         name2 = "obstacle"
         pose2 = deepcopy(origin_pose2)
         pose2.position.x = origin_pose2.position.x #- 3.5 * unit + col * unit
         pose2.position.y = origin_pose2.position.y #- 3.5 * unit + row * unit
         pose2.position.z = origin_pose2.position.z
-        self.spawn(name2, xml2, "", pose2, "world")
+        rospy.wait_for_service("gazebo/spawn_sdf_model",timeout=5)
+        try:
+            self.spawn(name2, xml2, "", pose2, "world")
+        except (rospy.ServiceException) as e:
+            print "gazebo/spawn_sdf_model service call failed (obstacle)"
+        
         
     def target_generate(self):
         self.goal_pose = np.array(GOAL)
