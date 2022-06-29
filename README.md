@@ -6,4 +6,4 @@ Due to some issues, I cannot push the whole project (the ros and gazebo dependen
 
 Feel free to contact me if you have question.
 
-![alt text](https://i.imgur.com/W5oh83p.jpg)
+![alt text](ezgif.com-gif-maker.gif)
